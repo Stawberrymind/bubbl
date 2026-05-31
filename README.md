@@ -3,24 +3,12 @@
 
 # bubbl- A Tamagotchi-inspired Desk Pet to keep friendships alive.
 
-2SB is a custom USB-C Flash Drive, or more commonly called a Pendrive. To the computer, it behaves like a single USB Drive, but the content in it completely changes based on the position of the switch, which is used to change which NAND Flash we're using.
+A friendship-powered Tamagotchi-inspired pet for your desk, which keeps friend groups alive through maintaining a common pet and sending nudges to eachother with plans for voicneotes!
 
 
 
 ## How does it work?
-To understand how it works, let's first understand the components of a Flash Drive (oversimplified);
-
-1. A port- to connect to a device (USB-C).
-2. USB Controller Chip- which controls the flash chips (Alcor AU6989SN-GT).
-3. NAND Flash- The little storage chips that actually store the data (Samsung K9G8G08U0M).
-
-So here, what really is happening is that we have two Independent Samsung NAND Flash chips (8 GB each), and both of them share the same data bus (shared connection highway) to the Alcor USB Controller. And there is a switch, a sliding switch, which controls which Chip's "CE Pin" is active; meanwhile, the other one gets pulled to LOW, meaning inactive, so the active chip responds to the commands from the Controller!
-So this eliminates software partitions, just simple hardware magic!
-
-Refer to this flowchart for a better understanding!
-
-
-
+There is one shared pet for everyone. Every bubbl device in the same group has the same pet, you can feed the pet, make it rest, Play with it. If no one in the friend group interacts with the pet, it decays the pet's stats, and this incentivises the friend group to keep interacting with the pet. In the process, friends can send each other nudges 
 ## Why did I make it?
 Honestly, I recently got into the world of Linux distros, and I started carrying 3 USB Drives in my bag at all times of distros, documents, tools, and it got really annoying because I didn't know which was which, and I just wondered if I could get rid of the hassle and have 2 USB drives in the format of one and I could switch between them. I did a bit of research and realised partitions exist; however, for someone who doesn't wanna go through the hassle of that, a physical switch seemed like the best alternative. Then I went to see if I could buy it online, but nothing like that was available, so I built it for myself!
 
