@@ -13,21 +13,22 @@ In the current day and age, where friendships are basically just sending each ot
 ## Components Required for the Build
 I have listed everything in the project; you can find the same in the BOM
 
-| No.   | Quantity | Comment                        | Footprint         | Link                                                                                                       | Price | Total (USD) | Note                            |
-| ----- | -------- | ------------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------- | ----- | ----------- | ------------------------------- |
-| 1     | 1        | XIAO-ESP32-S3-SMD              | XIAO-ESP32-S3-SMD | https://www.aliexpress.com/item/1005006987905528.html                                                      | 6.77  | 6.77        |  Select 1pc in listing          |
-| 2     | 2        | 10uF                           | C0603             | https://jlcpcb.com/partdetail/HRE-CGA0805X5R106K500MT/C6119889                                             | 0.01  | 0.02        | \-                              |
-| 3     | 2        | 100nF                          | C0603             | https://jlcpcb.com/partdetail/39123-0805B104K500NT/C38141                                                  | 0.01  | 0.02        | \-                              |
-| 4     | 1        | MAX98357A                      | \-                | https://www.aliexpress.com/item/1005007003802663.html                                                      | 0.65  | 0.65        |  Select 1pc in listing          |
-| 5     | 1        | INMP441                        | \-                | https://www.aliexpress.com/item/1005008870682636.html                                                      | 0.75  | 0.75        | \-                              |
-| 6     | 1        | 1.3" OLED                      | \-                | https://www.aliexpress.com/item/1005008365029314.html                                                      | 2.03  | 2.03        | Select 4pinI2C-White in listing |
-| 7     | 1        | Analog Joystick Module         | \-                | https://www.aliexpress.com/item/1005012147405483.html                                                      | 1.92  | 1.92        | \-                              |
-| 8     | 1        |  Vibration Motor Module        | \-                | https://www.aliexpress.com/item/33009331080.html                                                           | 0.49  | 0.49        | \-                              |
-| 9     | 10       | M2 X 3mm Phillips Round head   | \-                | https://onlyscrews.in/products/m2-x-5mm-phillips-round-head-laptop-screw                                   | 0.04  | 0.4         | \-                              |
-| 10    | 5        | M1.4 X 2mm Phillips Round head | \-                | https://onlyscrews.in/products/m1-4-x-2mm-phillips-round-head-laptop-and-mobile-screw-dia-1-4mm-length-2mm | 0.023 | 0.115       | \-                              |
-| 11    | 6        | M2 X 10mm Hard Dowel Pins      | \-                | https://onlyscrews.in/products/m2-x-10mm-hard-dowel-pins-dia-2mm-length-10mm                               | 0.051 | 0.306       | \-                              |
-| 12    | 5        | 2 Layer PCB                    | \-                | https://cart.jlcpcb.com/quote?spm=jlcpcb.Public.2006                                                       | 2.1   | 2.1         | \-                              |
-| Total |          |                                |                   |                                                                                                            |       | 15.571      |                                 |
+| No.   | Quantity | Comment                        | Footprint         | Link                                                                                                       | Price | Total (USD) |
+| ----- | -------- | ------------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------- | ----- | ----------- |
+| 1     | 1        | XIAO-ESP32-S3-SMD              | XIAO-ESP32-S3-SMD | https://www.aliexpress.com/item/1005006987905528.html                                                      | 6.77  | 6.77        |
+| 2     | 2        | 10uF                           | C0603             | https://jlcpcb.com/partdetail/HRE-CGA0805X5R106K500MT/C6119889                                             | 0.01  | 0.02        |
+| 3     | 2        | 100nF                          | C0603             | https://jlcpcb.com/partdetail/39123-0805B104K500NT/C38141                                                  | 0.01  | 0.02        |
+| 4     | 1        | MAX98357A                      | \-                | https://www.aliexpress.com/item/1005007003802663.html                                                      | 0.65  | 0.65        |
+| 5     | 1        | INMP441                        | \-                | https://www.aliexpress.com/item/1005008870682636.html                                                      | 0.75  | 0.75        |
+| 6     | 1        | 1.3" OLED                      | \-                | https://www.aliexpress.com/item/1005008365029314.html                                                      | 2.03  | 2.03        |
+| 7     | 1        | Analog Joystick Module         | \-                | https://www.aliexpress.com/item/1005012147405483.html                                                      | 1.92  | 1.92        |
+| 8     | 1        |  Vibration Motor Module        | \-                | https://www.aliexpress.com/item/33009331080.html                                                           | 0.49  | 0.49        |
+| 9     | 10       | M2 X 3mm Phillips Round head   | \-                | https://onlyscrews.in/products/m2-x-5mm-phillips-round-head-laptop-screw                                   | 0.04  | 0.4         |
+| 10    | 5        | M1.4 X 2mm Phillips Round head | \-                | https://onlyscrews.in/products/m1-4-x-2mm-phillips-round-head-laptop-and-mobile-screw-dia-1-4mm-length-2mm | 0.023 | 0.115       |
+| 11    | 6        | M2 X 10mm Hard Dowel Pins      | \-                | https://onlyscrews.in/products/m2-x-10mm-hard-dowel-pins-dia-2mm-length-10mm                               | 0.051 | 0.306       |
+| 12    | 1        | 400mAh LiPo                    | \-                | https://robu.in/product/400mah-pcm-protected-micro-li-po-battery-2/                                        | 2.86  | 2.86        |
+| 13    | 5        | 2 Layer PCB                    | \-                | https://cart.jlcpcb.com/quote?spm=jlcpcb.Public.2006                                                       | 2.1   | 2.1         |
+| Total |          |                                |                   |                                                                                                            |       | 18.431 USD  |
 
 
 
