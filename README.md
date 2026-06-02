@@ -61,49 +61,55 @@ Note: Please follow the wiring diagram :)
 1. Take the bottom case and install the PCB, and screw it into the bottom case using a M2 x 3 mm screw. Before screwing it, wire the BAT+ and BAT- from LiPO to the PCB.
 
 2. Screw in the Vibration motor after making the connections, as shown in the picture, using M2 x 3 mm
+
    <img width="282.2" height="323.5" alt="assembly_1" src="https://github.com/user-attachments/assets/2e2f0d22-dfcc-4465-a6bd-f06eada222eb" />
  
 3. Wire the Joystick Module to the PCB, then screw it in using M2 x 3 mm screws as shown in the picture.
-   <img width="310" height="235" alt="assembly_2" src="https://github.com/user-attachments/assets/0cbfe255-37e9-4d22-8f17-4f457c09ee6b" />
 
-4. Screw in the Speaker, with the diagphram facing outward towards the speaker holes, using a M2 X 3 mm screw as shown in the picture.
+    <img width="310" height="235" alt="assembly_2" src="https://github.com/user-attachments/assets/0cbfe255-37e9-4d22-8f17-4f457c09ee6b" />
+
+5. Screw in the Speaker, with the diagphram facing outward towards the speaker holes, using a M2 X 3 mm screw as shown in the picture.
+ 
    <img width="308" height="234" alt="assembly_3" src="https://github.com/user-attachments/assets/1128d4ed-6ca1-47fe-8aa3-4ca30eb71973" />
 
-5. Connect the amplifier to the microcontroller, then screw the amp into the case using  M1.4 x 2 mm screws as shown. Then connect the speaker to the amplifier.
+6. Connect the amplifier to the microcontroller, then screw the amp into the case using  M1.4 x 2 mm screws as shown. Then connect the speaker to the amplifier.
    
    <img width="285" height="208" alt="assembly_4" src="https://github.com/user-attachments/assets/f320be90-6768-496d-8e1f-9a74ac440ee2" />
    
-6. The bottom of the case should now look as shown below.
+7. The bottom of the case should now look as shown below.
    
    <img width="320" height="241" alt="assembly_5" src="https://github.com/user-attachments/assets/29431dd5-5ce9-484f-9330-d087a30ad550" />
 
-7. Insert M2 x 10 mm hard metal dowel pins into the bottom case as shown below.
+8. Insert M2 x 10 mm hard metal dowel pins into the bottom case as shown below.
    
    <img width="268" height="228" alt="assembly_6" src="https://github.com/user-attachments/assets/c8960940-0ccb-4962-ae7e-a6ee0f30206a" />
 
-8. Now it's time to assemble the top case, screw in the OLED to the underside of the top case using M2 x 3 mm screws as shown and wire it to the microcontroller.
+9. Now it's time to assemble the top case, screw in the OLED to the underside of the top case using M2 x 3 mm screws as shown and wire it to the microcontroller.
 
    <img width="313" height="279" alt="assembly_7" src="https://github.com/user-attachments/assets/37cfa003-aea0-4b44-a69c-1dbc0a6fef15" />
 
-9. Install the INMP441 I2S Microphone with M1.4 x 2 mm screws into the case as shown and wire it to the microcontroller.
+10. Install the INMP441 I2S Microphone with M1.4 x 2 mm screws into the case as shown and wire it to the microcontroller.
+ 
    <img width="283" height="204" alt="assembly_8" src="https://github.com/user-attachments/assets/91ab84ec-8c45-4bab-84e9-2c0283265543" />
 
-10. Lower the top case onto the bottom one, applying firm pressure equally from all sides to make sure the top locks in with the bottom using the dowel pins.
-11. Your own personal bubbl is now complete!
+11. Lower the top case onto the bottom one, applying firm pressure equally from all sides to make sure the top locks in with the bottom using the dowel pins.
+12. Your own personal bubbl is now complete!
 
 ## Setting it up
 Section I: Setting up Supabase:
 1. Go to https://supabase.com/ and create a new account
 2. Create a new project
-   <img width="182" height="152" alt="image" src="https://github.com/user-attachments/assets/e76cbfa2-75d0-4843-92f5-af39da6d6c31" />
 
-3. Go to the SQL Editor Tab and paste the content of the bubbl_supabase file in Firmware into the editor
+    <img width="182" height="152" alt="image" src="https://github.com/user-attachments/assets/e76cbfa2-75d0-4843-92f5-af39da6d6c31" />
+
+4. Go to the SQL Editor Tab and paste the content of the bubbl_supabase file in Firmware into the editor
+
    <img width="356" height="218" alt="image" src="https://github.com/user-attachments/assets/2c5e036c-82f1-482c-9932-c57d885fc9d5" />
 
-4. Run the script, this will lead to the creation of the following tables : pet, users, events, nudges
-5. In the SQL Editor, enter your friends' names in place of user1...4
+5. Run the script, which will lead to the creation of the following tables: pet, users, events, and nudges
+6. In the SQL Editor, enter your friends' names in place of user1...4
 
-6. Go to your Supabase settings, then to API and copy your:
+7. Go to your Supabase settings, then to API and copy your:
    * Project URL
    * Anom public key
 
@@ -140,11 +146,20 @@ Section II: Setting up the firmware:
         └── Assets/
         
 ```
+## Future Additions
+In upcoming software versions, I will include support to send short voice notes to your buddies!
 
+## Credits
 
-## Datasheets and References
-
+The idea: https://github.com/TaniWanKenobi/tamagotchi
+Vibration motor module: https://grabcad.com/library/vibration-motors-1
+OLED module: https://grabcad.com/library/oled-display-1-3-2
+Amplifier: https://grabcad.com/library/max98357a-3w-i2s-amplifier-1
+Microphone: https://grabcad.com/library/inmp441-microphone-module-1
+Joystick: https://grabcad.com/library/dual-axis-xy-joystick-module-with-push-button-1
 
 ## Zine
+
+<img width="1410" height="2000" alt="bubbl_zine" src="https://github.com/user-attachments/assets/03033711-a8e1-4723-8ae2-41cc92df9b25" />
 
 
