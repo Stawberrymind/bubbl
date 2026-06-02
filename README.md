@@ -151,6 +151,8 @@ In upcoming software versions, I will include support to send short voice notes 
 
 ## Credits
 
+Abhinav [goat]
+
 The idea: https://github.com/TaniWanKenobi/tamagotchi
 
 Vibration motor module: https://grabcad.com/library/vibration-motors-1
