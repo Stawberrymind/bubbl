@@ -66,9 +66,9 @@ Note: Please follow the wiring diagram :)
  
 3. Wire the Joystick Module to the PCB, then screw it in using M2 x 3 mm screws as shown in the picture.
 
-    <img width="310" height="235" alt="assembly_2" src="https://github.com/user-attachments/assets/0cbfe255-37e9-4d22-8f17-4f457c09ee6b" />
+   <img width="310" height="235" alt="assembly_2" src="https://github.com/user-attachments/assets/0cbfe255-37e9-4d22-8f17-4f457c09ee6b" />
 
-5. Screw in the Speaker, with the diagphram facing outward towards the speaker holes, using a M2 X 3 mm screw as shown in the picture.
+5. Screw in the Speaker, with the diaphragm facing outward towards the speaker holes, using a M2 X 3 mm screw as shown in the picture.
  
    <img width="308" height="234" alt="assembly_3" src="https://github.com/user-attachments/assets/1128d4ed-6ca1-47fe-8aa3-4ca30eb71973" />
 
@@ -100,7 +100,7 @@ Section I: Setting up Supabase:
 1. Go to https://supabase.com/ and create a new account
 2. Create a new project
 
-    <img width="182" height="152" alt="image" src="https://github.com/user-attachments/assets/e76cbfa2-75d0-4843-92f5-af39da6d6c31" />
+   <img width="182" height="152" alt="image" src="https://github.com/user-attachments/assets/e76cbfa2-75d0-4843-92f5-af39da6d6c31" />
 
 4. Go to the SQL Editor Tab and paste the content of the bubbl_supabase file in Firmware into the editor
 
@@ -152,11 +152,17 @@ In upcoming software versions, I will include support to send short voice notes 
 ## Credits
 
 The idea: https://github.com/TaniWanKenobi/tamagotchi
+
 Vibration motor module: https://grabcad.com/library/vibration-motors-1
+
 OLED module: https://grabcad.com/library/oled-display-1-3-2
+
 Amplifier: https://grabcad.com/library/max98357a-3w-i2s-amplifier-1
+
 Microphone: https://grabcad.com/library/inmp441-microphone-module-1
+
 Joystick: https://grabcad.com/library/dual-axis-xy-joystick-module-with-push-button-1
+
 
 ## Zine
 
