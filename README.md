@@ -1,6 +1,6 @@
 <img width="450" height="450" alt="bubbl_assembled" src="https://github.com/user-attachments/assets/760c4679-654a-4ba0-b6cc-c4b3d01c640f" />
 
-# bubbl- A tamagotchi-inspired Desk Pet to keep friendships alive.
+# bubbl- A tamagotchi-inspired desk pet to keep friendships alive.
 
 A friendship-powered Tamagotchi-inspired pet for your desk, which looks like a Japanese onigiri, keeps friend groups alive by maintaining a common pet and sending nudges to each other, just to keep the drifting friend group a little closer! 
 
