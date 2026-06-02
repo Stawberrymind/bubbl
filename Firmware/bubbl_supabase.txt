@@ -1,0 +1,245 @@
+drop table if exists nudges;
+drop table if exists users;
+drop view if exists recent_events;
+drop table if exists events;
+drop table if exists pet;
+
+create table pet (
+  id int primary key default 1,
+
+  hunger float default 80,
+  happiness float default 80,
+  energy float default 80,
+
+  last_update timestamptz default now()
+);
+
+create table events (
+  id bigint generated always as identity primary key,
+
+  username text not null,
+
+  action text not null check (
+    action in ('feed','rest','play')
+  ),
+
+  created_at timestamptz default now()
+);
+
+create table users (
+  id bigint generated always as identity primary key,
+
+  username text unique not null,
+
+  created_at timestamptz default now()
+);
+
+create table nudges (
+  id bigint generated always as identity primary key,
+
+  sender text not null,
+  receiver text not null,
+
+  seen boolean default false,
+
+  created_at timestamptz default now()
+);
+
+insert into pet (id) values (1);
+
+create or replace function update_pet()
+returns void as $$
+declare
+  hours_passed int;
+  last_update_val timestamptz;
+begin
+
+  select last_update
+  into last_update_val
+  from pet
+  where id = 1;
+
+  hours_passed :=
+    floor(
+      extract(
+        epoch from (now() - last_update_val)
+      ) / 3600
+    )::int;
+
+  if hours_passed > 0 then
+
+    update pet
+    set
+      hunger = greatest(0, hunger - hours_passed),
+      happiness = greatest(0, happiness - hours_passed),
+      energy = greatest(0, energy - hours_passed),
+
+      last_update =
+        last_update +
+        (hours_passed * interval '1 hour')
+
+    where id = 1;
+
+  end if;
+
+end;
+$$ language plpgsql;
+
+create or replace function feed_pet(user_name text)
+returns void as $$
+declare
+  action_count int;
+begin
+
+  select count(*)
+  into action_count
+  from events
+  where username = user_name
+    and created_at >= date_trunc('day', now());
+
+  if action_count >= 2 then
+    raise exception
+      'You can only interact 2 times per day';
+  end if;
+
+  perform update_pet();
+
+  update pet
+  set
+    hunger = least(100, hunger + 10),
+    energy = least(100, energy + 5)
+  where id = 1;
+
+  insert into events (username, action)
+  values (user_name, 'feed');
+
+end;
+$$ language plpgsql;
+
+create or replace function rest_pet(user_name text)
+returns void as $$
+declare
+  action_count int;
+begin
+
+  select count(*)
+  into action_count
+  from events
+  where username = user_name
+    and created_at >= date_trunc('day', now());
+
+  if action_count >= 2 then
+    raise exception
+      'You can only interact 2 times per day';
+  end if;
+
+  perform update_pet();
+
+  update pet
+  set
+    energy = least(100, energy + 10)
+  where id = 1;
+
+  insert into events (username, action)
+  values (user_name, 'rest');
+
+end;
+$$ language plpgsql;
+
+create or replace function play_pet(user_name text)
+returns void as $$
+declare
+  action_count int;
+begin
+
+  select count(*)
+  into action_count
+  from events
+  where username = user_name
+    and created_at >= date_trunc('day', now());
+
+  if action_count >= 2 then
+    raise exception
+      'You can only interact 2 times per day';
+  end if;
+
+  perform update_pet();
+
+  update pet
+  set
+    happiness = least(100, happiness + 10),
+    hunger = greatest(0, hunger - 5)
+  where id = 1;
+
+  insert into events (username, action)
+  values (user_name, 'play');
+
+end;
+$$ language plpgsql;
+
+create or replace view recent_events as
+select
+  username,
+  action,
+
+  case
+    when extract(epoch from (now() - created_at)) < 60
+      then floor(
+        extract(epoch from (now() - created_at))
+      )::text || 's'
+
+    when extract(epoch from (now() - created_at)) < 3600
+      then floor(
+        extract(epoch from (now() - created_at)) / 60
+      )::text || 'm'
+
+    when extract(epoch from (now() - created_at)) < 86400
+      then floor(
+        extract(epoch from (now() - created_at)) / 3600
+      )::text || 'h'
+
+    else
+      floor(
+        extract(epoch from (now() - created_at)) / 86400
+      )::text || 'd'
+  end as time_ago
+
+from events
+
+order by created_at desc;
+
+insert into users (username)
+values
+  ('user1'),
+  ('user2'),
+  ('user3'),
+  ('user4');
+
+alter table pet enable row level security;
+alter table events enable row level security;
+alter table users enable row level security;
+alter table nudges enable row level security;
+
+create policy "open pet"
+on pet
+for all
+using (true)
+with check (true);
+
+create policy "open events"
+on events
+for all
+using (true)
+with check (true);
+
+create policy "open users"
+on users
+for all
+using (true)
+with check (true);
+
+create policy "open nudges"
+on nudges
+for all
+using (true)
+with check (true);
