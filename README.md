@@ -48,6 +48,12 @@ And the PCB is a 2-layer PCB with a ground plane as layer 2:
 <img width="540" height="741" alt="pcb_3d" src="https://github.com/user-attachments/assets/56dab36e-8f00-48ec-be77-da117c3318d2" />
 
 
+Wiring diagram:
+
+<img width="1269" height="767" alt="wiring_diagram" src="https://github.com/user-attachments/assets/46b482e5-5bc5-4173-a3d1-ceff13c312c4" />
+
+
+
 ## Case
 Top and bottom view of the Case:
 
