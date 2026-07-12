@@ -1,1367 +1,812 @@
+// ============================================================================
+//  bubbl — a tiny networked virtual pet for ESP32-S3
+//  OLED (SSD1306) + analog joystick + Supabase backend + I2S audio
+// ----------------------------------------------------------------------------
+//  Highlights of this build:
+//    * One reusable TLS-aware HTTP helper (no more copy-pasted boilerplate)
+//    * Proper 2xx status + JSON error checking on every request
+//    * Non-blocking WiFi connect with timeout + auto-reconnect
+//    * Animated pet: blinking eyes, mood-driven mouth, subtle idle bob
+//    * Graphical stat bars + live connection indicator
+//    * Nudge notifications actually play a sound now
+// ============================================================================
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Fonts/Picopixel.h>
 #include <Audio.h>
 #include <SPIFFS.h>
 
-const char* ssid = "your_wifi_ssid";
-const char* password = "your_wifi_password";
-
-const char* supabaseUrl = "your_supabase_url";
-const char* apiKey = "your_supabase_api_key";
+// ---- Credentials -----------------------------------------------------------
+const char* ssid          = "your_wifi_ssid";
+const char* password      = "your_wifi_password";
+const char* supabaseUrl   = "your_supabase_url";   // e.g. https://xxxx.supabase.co
+const char* apiKey        = "your_supabase_api_key";
 
 String username = "xyz_user";
-Audio audio;
 
+// ---- Audio -----------------------------------------------------------------
+Audio audio;
+const char* NOTIFY_SOUND = "/bubbl.wav";   // file present in SPIFFS
 bool playNotification = false;
 
-#define SCREEN_WIDTH 128
+// ---- Display ---------------------------------------------------------------
+#define SCREEN_WIDTH  128
 #define SCREEN_HEIGHT 64
-
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-#define JOY_X A0
-#define JOY_Y A1
+// ---- Pins (ESP32-S3) -------------------------------------------------------
+#define JOY_X   A0
+#define JOY_Y   A1
 #define JOY_BTN D2
+#define I2C_SDA 5
+#define I2C_SCL 6
+#define I2S_BCLK 9
+#define I2S_LRC  10
+#define I2S_DIN  8
 
-const int updateDelay = 60000;
-const int pressDelay = 250;
-const int moveDelay = 200;
-const int frameDelay = 33;
-const int popupDuration = 2000;
-const int longPressDelay = 700;
-const int nudgeCheckDelay = 60000;
+// ---- Timing (ms) -----------------------------------------------------------
+const unsigned long updateDelay     = 60000;   // pet sync cooldown
+const unsigned long pressDelay      = 250;
+const unsigned long moveDelay       = 200;
+const unsigned long frameDelay      = 33;      // ~30 fps
+const unsigned long popupDuration   = 2000;
+const unsigned long longPressDelay  = 700;
+const unsigned long nudgeCheckDelay = 60000;
+const unsigned long blinkInterval   = 3200;    // blink roughly every few seconds
+const unsigned long blinkDuration   = 140;
+const unsigned long wifiTimeout     = 15000;   // initial connect budget
+const unsigned long wifiRetryDelay  = 10000;   // gap between reconnect attempts
+const int           httpTimeout     = 5000;
+const int           httpRetries     = 2;
 
-bool firstSync = true;
-bool loadingPopup = false;
-bool lastButtonState = HIGH;
+// ---- HTTP joystick thresholds ----------------------------------------------
+const int JOY_LOW  = 1200;
+const int JOY_HIGH = 2800;
+
+// ---- State flags -----------------------------------------------------------
+bool firstSync          = true;
+bool loadingPopup       = false;
+bool lastButtonState    = HIGH;
 bool longPressTriggered = false;
 
+// ---- Model -----------------------------------------------------------------
 struct Pet {
   int hunger;
   int happy;
   int energy;
   unsigned long age;
-  int mood;
+  int mood;       // 0 sad, 1 ok, 2 happy
 };
+Pet pet = {0, 0, 0, 0, 1};
 
-Pet pet = {0,0,0,0,0};
-
-struct Event {
-  String text;
-};
-
+struct Event { String text; };
 Event events[5];
-
 String users[10];
 
-int eventCount = 0;
+int eventCount    = 0;
 int selectedEvent = 0;
+int userCount     = 0;
+int selectedUser  = 0;
 
-int userCount = 0;
-int selectedUser = 0;
-
+// ---- Animation / scroll ----------------------------------------------------
 unsigned long textScrollTimer = 0;
-int textScrollX = 0;
+int  textScrollX = 0;
 
-unsigned long lastUpdate = 0;
-unsigned long lastPrint = 0;
-unsigned long lastPress = 0;
-unsigned long lastMove = 0;
-unsigned long lastFrame = 0;
-unsigned long popupStart = 0;
+unsigned long lastUpdate      = 0;
+unsigned long lastPrint       = 0;
+unsigned long lastPress       = 0;
+unsigned long lastMove        = 0;
+unsigned long lastFrame       = 0;
+unsigned long popupStart      = 0;
 unsigned long buttonHoldStart = 0;
-unsigned long lastNudgeCheck = 0;
+unsigned long lastNudgeCheck  = 0;
+unsigned long lastWifiTry     = 0;
+unsigned long blinkTimer      = 0;
+bool          eyesClosed      = false;
 
-const char* options[] = {"Feed", "Rest", "Play"};
+// ---- Menu data -------------------------------------------------------------
+const char* options[]   = {"Feed", "Rest", "Play"};
 int selected = 1;
 const int total = 3;
-int xPositions[] = {2,53,103};
+int xPositions[] = {2, 53, 103};
 
-const char* petOptions[] = {"Stats","Nudge","Activity"};
+const char* petOptions[] = {"Stats", "Nudge", "Activity"};
 int selectedPetOption = 0;
 const int petTotal = 3;
 
-enum Screen {
-  MAIN,
-  PET_MENU,
-  STATS,
-  ACTIVITY,
-  NUDGE
-};
-
+enum Screen { MAIN, PET_MENU, STATS, ACTIVITY, NUDGE };
 Screen currentScreen = MAIN;
 
-enum Focus {
-  MENU,
-  PET
-};
-
+enum Focus { MENU, PET };
 Focus currentFocus = MENU;
 
 String popupMessage = "";
 
-void petSync();
+// ---- Networking ------------------------------------------------------------
+WiFiClientSecure secureClient;
+
+// ---- Forward declarations --------------------------------------------------
+void petSync(bool force = false);
 void eventSync();
 void fetchUsers();
 void sendNudge();
 void checkForNudges();
+void connectWiFi();
+void ensureWiFi();
 
-void drawPopup() {
+// ============================================================================
+//  HTTP helper — TLS-aware, retrying, with proper status reporting
+// ============================================================================
 
-  if (loadingPopup) {
+// Performs a request against `path` (appended to supabaseUrl).
+// Returns true only on a 2xx response. The body (if any) lands in `outBody`,
+// and the final HTTP status code in `outCode`.
+bool supabaseRequest(const char* method,
+                     const String& path,
+                     const String& body,
+                     String& outBody,
+                     int& outCode) {
+  outBody = "";
+  outCode = -1;
 
-    display.fillRect(14,20,100,20, WHITE);
-
-    display.setTextColor(BLACK);
-
-    display.setCursor(34,27);
-
-    display.print("Loading...");
-
-    display.setTextColor(WHITE);
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[HTTP] skipped — WiFi down");
+    return false;
   }
 
-  else if (millis() - popupStart < popupDuration) {
+  String url = String(supabaseUrl) + path;
 
-    display.fillRect(8,20,112,20, WHITE);
+  for (int attempt = 0; attempt <= httpRetries; attempt++) {
+    HTTPClient http;
+    if (!http.begin(secureClient, url)) {
+      Serial.println("[HTTP] begin() failed");
+      continue;
+    }
 
+    http.setTimeout(httpTimeout);
+    http.addHeader("apikey", apiKey);
+    http.addHeader("Authorization", "Bearer " + String(apiKey));
+    if (body.length() > 0) {
+      http.addHeader("Content-Type", "application/json");
+    }
+
+    int code;
+    if (strcmp(method, "GET") == 0) {
+      code = http.GET();
+    } else if (strcmp(method, "POST") == 0) {
+      code = http.POST(body);
+    } else {
+      code = http.sendRequest(method, (uint8_t*)body.c_str(), body.length());
+    }
+
+    outCode = code;
+    if (code > 0) {
+      outBody = http.getString();
+    }
+    http.end();
+
+    Serial.printf("[HTTP] %s %s -> %d (try %d)\n",
+                  method, path.c_str(), code, attempt + 1);
+
+    if (code >= 200 && code < 300) return true;
+
+    // Retry only on transient/connection failures, not on real HTTP errors.
+    if (code > 0) return false;
+    delay(150);
+  }
+  return false;
+}
+
+// Convenience wrapper: GET + JSON parse with error checking.
+bool supabaseGetJson(const String& path, JsonDocument& doc) {
+  String resp;
+  int code;
+  if (!supabaseRequest("GET", path, "", resp, code)) return false;
+
+  DeserializationError err = deserializeJson(doc, resp);
+  if (err) {
+    Serial.print("[JSON] parse error: ");
+    Serial.println(err.c_str());
+    return false;
+  }
+  return true;
+}
+
+// ============================================================================
+//  Drawing
+// ============================================================================
+
+void drawPopup() {
+  if (loadingPopup) {
+    display.fillRect(14, 20, 100, 20, WHITE);
     display.setTextColor(BLACK);
-
-    display.setCursor(18,27);
-
-    display.print(popupMessage);
-
+    display.setCursor(34, 27);
+    display.print("Loading...");
     display.setTextColor(WHITE);
+  } else if (millis() - popupStart < popupDuration) {
+    display.fillRect(8, 20, 112, 20, WHITE);
+    display.setTextColor(BLACK);
+    display.setCursor(18, 27);
+    display.print(popupMessage);
+    display.setTextColor(WHITE);
+  }
+}
+
+// Small WiFi indicator in the top-left corner.
+void drawConnIcon() {
+  bool up = (WiFi.status() == WL_CONNECTED);
+  if (up) {
+    // three rising bars
+    display.fillRect(2, 6, 2, 2, WHITE);
+    display.fillRect(5, 4, 2, 4, WHITE);
+    display.fillRect(8, 2, 2, 6, WHITE);
+  } else {
+    // hollow bars + slash to signal offline
+    display.drawRect(2, 6, 2, 2, WHITE);
+    display.drawRect(5, 4, 2, 4, WHITE);
+    display.drawLine(1, 8, 10, 1, WHITE);
   }
 }
 
 void drawBootScreen() {
-
-  Serial.println("Drawing boot screen");
-
   display.clearDisplay();
-
   display.setTextColor(WHITE);
-
   display.setTextSize(1);
-
-  display.setCursor(5,23);
-
+  display.setCursor(5, 23);
   display.print("Bubbl is starting");
-
-  display.setCursor(26,33);
-
+  display.setCursor(26, 33);
   display.print("Please wait..");
-
   display.display();
 }
 
-void drawMainUI() {
+// Draws the animated face inside the main circle.
+// `filled` = pet circle is highlighted (focused).
+void drawPetFace(int cx, int cy, bool filled) {
+  uint16_t bg = filled ? WHITE : BLACK;
+  uint16_t fg = filled ? BLACK : WHITE;
 
+  if (filled) display.fillCircle(cx, cy, 20, WHITE);
+  else        display.drawCircle(cx, cy, 20, WHITE);
+
+  int eyeY = cy - 4;
+  int eyeDX = 7;
+
+  if (eyesClosed) {
+    // happy/sleepy closed eyes
+    display.drawFastHLine(cx - eyeDX - 1, eyeY, 4, fg);
+    display.drawFastHLine(cx + eyeDX - 2, eyeY, 4, fg);
+  } else {
+    display.fillRect(cx - eyeDX - 1, eyeY - 1, 2, 3, fg);
+    display.fillRect(cx + eyeDX - 1, eyeY - 1, 2, 3, fg);
+  }
+
+  // Mouth reflects mood.
+  int mouthY = cy + 7;
+  if (pet.mood == 2) {
+    // smile
+    display.drawLine(cx - 6, mouthY,     cx - 3, mouthY + 2, fg);
+    display.drawLine(cx - 3, mouthY + 2, cx + 3, mouthY + 2, fg);
+    display.drawLine(cx + 3, mouthY + 2, cx + 6, mouthY,     fg);
+  } else if (pet.mood == 1) {
+    // flat
+    display.drawFastHLine(cx - 5, mouthY + 1, 11, fg);
+  } else {
+    // frown
+    display.drawLine(cx - 6, mouthY + 2, cx - 3, mouthY,     fg);
+    display.drawLine(cx - 3, mouthY,     cx + 3, mouthY,     fg);
+    display.drawLine(cx + 3, mouthY,     cx + 6, mouthY + 2, fg);
+  }
+  (void)bg;
+}
+
+void drawMainUI() {
   display.clearDisplay();
 
+  drawConnIcon();
+
   display.setFont(&Picopixel);
-
   display.setTextColor(WHITE);
-
-  display.setCursor(56,4);
-
+  display.setCursor(56, 4);
   display.print("bubbl");
-
   display.setFont();
 
-  if (currentFocus == PET) {
-
-    display.fillCircle(64,28,20, WHITE);
-
-    display.setTextColor(BLACK);
-
-    display.setCursor(59,32);
-
-    if (pet.mood == 0) display.print(":(");
-    else if (pet.mood == 1) display.print(":|");
-    else display.print(":)");
-  }
-
-  else {
-
-    display.drawCircle(64,28,20, WHITE);
-  }
+  // Subtle idle bob: ±1px over a slow sine-ish cycle.
+  int bob = ((millis() / 600) % 2 == 0) ? 0 : 1;
+  drawPetFace(64, 28 + bob, currentFocus == PET);
 
   for (int i = 0; i < total; i++) {
-
     if (currentFocus == MENU && i == selected) {
-      display.setTextColor(BLACK,WHITE);
-    }
-
-    else {
+      display.setTextColor(BLACK, WHITE);
+    } else {
       display.setTextColor(WHITE);
     }
-
-    display.setCursor(xPositions[i],54);
-
+    display.setCursor(xPositions[i], 54);
     display.print(options[i]);
   }
 
   drawPopup();
-
   display.display();
 }
 
 void drawPetMainUI() {
-
   display.clearDisplay();
-
   display.setTextColor(WHITE);
-
-  display.setCursor(38,5);
-
+  display.setCursor(38, 5);
   display.print("Pet Menu");
 
   for (int i = 0; i < petTotal; i++) {
-
     int y = 20 + (i * 12);
-
     if (i == selectedPetOption) {
-
       display.fillRect(18, y - 1, 92, 10, WHITE);
-
       display.setTextColor(BLACK);
-    }
-
-    else {
-
+    } else {
       display.setTextColor(WHITE);
     }
-
-    display.setCursor(28,y);
-
+    display.setCursor(28, y);
     display.print(petOptions[i]);
   }
 
   drawPopup();
-
   display.display();
 }
 
-void drawStatsUI() {
-
-  display.clearDisplay();
-
+// Draws a labelled stat bar at row `y`.
+void drawStatBar(int y, const char* label, int value) {
   display.setTextColor(WHITE);
+  display.setCursor(2, y);
+  display.print(label);
 
+  int barX = 52, barW = 70, barH = 6;
+  int barY = y - 1;
+  display.drawRect(barX, barY, barW, barH, WHITE);
+
+  int v = constrain(value, 0, 100);
+  int fillW = (barW - 2) * v / 100;
+  if (fillW > 0) display.fillRect(barX + 1, barY + 1, fillW, barH - 2, WHITE);
+}
+
+void drawStatsUI() {
+  display.clearDisplay();
   display.setTextWrap(false);
 
-  display.setCursor(29,44);
+  display.setTextColor(BLACK, WHITE);
+  display.setCursor(5, 1);
+  if (pet.mood == 0)      display.print(" Your pet is sad   ");
+  else if (pet.mood == 1) display.print(" Your pet is ok    ");
+  else                    display.print(" Your pet is happy ");
 
-  display.print("Hunger - ");
-
-  display.print(pet.hunger);
-
-  display.setCursor(20,24);
-
-  display.print("Happiness - ");
-
-  display.print(pet.happy);
-
-  display.setCursor(29,34);
-
-  display.print("Energy - ");
-
-  display.print(pet.energy);
-
-  display.setTextColor(BLACK,WHITE);
-
-  display.setCursor(5,9);
-
-  if (pet.mood == 0) display.print(" Your pet is sad ");
-  else if (pet.mood == 1) display.print(" Your pet is ok ");
-  else display.print(" Your pet is happy ");
+  drawStatBar(22, "Food", pet.hunger);
+  drawStatBar(36, "Joy ", pet.happy);
+  drawStatBar(50, "Pep ", pet.energy);
 
   drawPopup();
-
   display.display();
 }
 
 void drawActivityUI() {
-
   display.clearDisplay();
-
   display.setTextWrap(false);
-
-  display.setTextColor(BLACK,WHITE);
-
-  display.setCursor(0,0);
-
+  display.setTextColor(BLACK, WHITE);
+  display.setCursor(0, 0);
   display.print("    Recent Actions    ");
 
+  if (eventCount == 0) {
+    display.setTextColor(WHITE);
+    display.setCursor(18, 30);
+    display.print("No activity yet");
+  }
+
   for (int i = 0; i < eventCount; i++) {
-
     int y = 11 + (i * 10);
-
     bool selectedNow = (i == selectedEvent);
-
     String text = "> " + events[i].text;
 
     if (selectedNow) {
-
       display.fillRect(0, y - 1, 128, 9, WHITE);
-
       display.setTextColor(BLACK);
 
       int textWidth = text.length() * 6;
-
       if (textWidth > 128) {
-
         if (millis() - textScrollTimer > 120) {
-
           textScrollTimer = millis();
-
           textScrollX--;
-
-          if (textScrollX < -(textWidth - 120)) {
-            textScrollX = 0;
-          }
+          if (textScrollX < -(textWidth - 120)) textScrollX = 0;
         }
-
         display.setCursor(textScrollX + 2, y);
+      } else {
+        display.setCursor(0, y);
       }
-
-      else {
-
-        display.setCursor(0,y);
-      }
-    }
-
-    else {
-
+    } else {
       display.setTextColor(WHITE);
-
-      display.setCursor(0,y);
+      display.setCursor(0, y);
     }
-
     display.print(text);
   }
 
   drawPopup();
-
   display.display();
 }
 
 void drawNudgeUI() {
-
   display.clearDisplay();
-
   display.setTextColor(WHITE);
-
-  display.setCursor(28,5);
-
+  display.setCursor(28, 5);
   display.print("Nudge Friend");
 
+  if (userCount == 0) {
+    display.setCursor(20, 30);
+    display.print("No friends online");
+  }
+
   for (int i = 0; i < userCount; i++) {
-
     int y = 20 + (i * 10);
-
     if (i == selectedUser) {
-
       display.fillRect(8, y - 1, 112, 9, WHITE);
-
       display.setTextColor(BLACK);
-    }
-
-    else {
-
+    } else {
       display.setTextColor(WHITE);
     }
-
-    display.setCursor(16,y);
-
+    display.setCursor(16, y);
     display.print(users[i]);
   }
 
   drawPopup();
-
   display.display();
 }
 
+// ============================================================================
+//  Pet logic
+// ============================================================================
+
 void petStatus() {
-
-  Serial.println("Updating pet mood");
-
   if (pet.hunger < 30 || pet.happy < 30 || pet.energy < 30) {
     pet.mood = 0;
-  }
-
-  else if (
-    pet.hunger > 65 &&
-    pet.happy > 65 &&
-    pet.energy > 65
-  ) {
+  } else if (pet.hunger > 65 && pet.happy > 65 && pet.energy > 65) {
     pet.mood = 2;
-  }
-
-  else {
+  } else {
     pet.mood = 1;
   }
-
-  Serial.print("Pet mood: ");
+  Serial.print("[PET] mood: ");
   Serial.println(pet.mood);
 }
 
-void setup() {
-
-  Serial.begin(115200);
-
-  Serial.println();
-  Serial.println("========== BOOT ==========");
-
-  pinMode(JOY_BTN, INPUT_PULLUP);
-
-  Serial.println("Joystick button configured");
-
-  Wire.begin(5,6);
-
-  Serial.println("I2C started");
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-
-    Serial.println("OLED FAILED");
-
-    while (1);
+// Advances the blink animation. Call every frame.
+void updateBlink() {
+  unsigned long now = millis();
+  if (!eyesClosed && now - blinkTimer > blinkInterval) {
+    eyesClosed = true;
+    blinkTimer = now;
+  } else if (eyesClosed && now - blinkTimer > blinkDuration) {
+    eyesClosed = false;
+    blinkTimer = now;
   }
+}
 
-  Serial.println("OLED initialized");
+// ============================================================================
+//  WiFi
+// ============================================================================
 
-  drawBootScreen();
-
-  Serial.print("Connecting to WiFi: ");
+void connectWiFi() {
+  Serial.print("[WiFi] connecting to ");
   Serial.println(ssid);
 
-  WiFi.begin(ssid,password);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
 
-  while (WiFi.status() != WL_CONNECTED) {
-
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < wifiTimeout) {
     Serial.print(".");
-    delay(500);
+    delay(250);
   }
-
   Serial.println();
-  Serial.println("WiFi connected");
 
-  if (!SPIFFS.begin(true)) {
-  Serial.println("SPIFFS Mount Failed");
-
-  audio.connecttoFS(
-  SPIFFS,
-  "/bubbl.wav"
-  )
-
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("[WiFi] connected, IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("[WiFi] connect timed out — will keep retrying");
+  }
+  lastWifiTry = millis();
 }
 
-audio.setPinout(
-  9,   // BCLK
-  10,  // LRC / WS
-  8    // DIN
-);
+// Non-blocking reconnect: nudges WiFi back up without freezing the UI.
+void ensureWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  if (millis() - lastWifiTry < wifiRetryDelay) return;
 
-audio.setVolume(15);
-
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-
-  petSync();
-
-  fetchUsers();
-
-  display.clearDisplay();
-
-  display.display();
-
-  Serial.println("Setup complete");
+  Serial.println("[WiFi] reconnecting...");
+  WiFi.disconnect();
+  WiFi.begin(ssid, password);
+  lastWifiTry = millis();
 }
+
+// ============================================================================
+//  Backend calls
+// ============================================================================
 
 void callFunction(String functionName) {
-
-  Serial.print("Calling RPC function: ");
+  Serial.print("[RPC] ");
   Serial.println(functionName);
 
   loadingPopup = true;
+  if (currentScreen == MAIN)       drawMainUI();
+  else if (currentScreen == STATS) drawStatsUI();
 
-  if (currentScreen == MAIN) {
-    drawMainUI();
-  }
-
-  else if (currentScreen == STATS) {
-    drawStatsUI();
-  }
-
-  HTTPClient http;
-
-  String url =
-    String(supabaseUrl) +
-    "/rest/v1/rpc/" +
-    functionName;
-
-  Serial.print("RPC URL: ");
-  Serial.println(url);
-
-  http.begin(url);
-
-  http.setTimeout(2000);
-
-  http.addHeader("Content-Type","application/json");
-
-  http.addHeader("apikey",apiKey);
-
-  http.addHeader(
-    "Authorization",
-    "Bearer " + String(apiKey)
-  );
-
-  String body =
-    "{\"user_name\":\"" +
-    username +
-    "\"}";
-
-  Serial.print("RPC Body: ");
-  Serial.println(body);
-
-  int httpResponseCode = http.POST(body);
-
-  Serial.print("RPC Response Code: ");
-  Serial.println(httpResponseCode);
+  String body = "{\"user_name\":\"" + username + "\"}";
+  String resp;
+  int code;
+  bool ok = supabaseRequest("POST", "/rest/v1/rpc/" + functionName, body, resp, code);
 
   loadingPopup = false;
+  popupMessage = ok ? "Success!" : "Server Error";
+  popupStart   = millis();
+}
 
-  if (httpResponseCode == 204) {
+void feedPet() { Serial.println("[ACT] feed"); callFunction("feed_pet"); petSync(true); }
+void restPet() { Serial.println("[ACT] rest"); callFunction("rest_pet"); petSync(true); }
+void playPet() { Serial.println("[ACT] play"); callFunction("play_pet"); petSync(true); }
 
-    popupMessage = "Success!";
-
-    popupStart = millis();
-
-    Serial.println("RPC success");
+void petSync(bool force) {
+  if (!force && !firstSync && millis() - lastUpdate < updateDelay) {
+    Serial.println("[SYNC] skipped (cooldown)");
+    return;
   }
+  firstSync  = false;
+  lastUpdate = millis();
 
-  else {
-
-    popupMessage = "Server Error";
-
-    popupStart = millis();
-
-    Serial.println("RPC failed");
-  }
-
-  http.end();
-
-  Serial.println("RPC request ended");
-}
-
-void feedPet() {
-
-  Serial.println("Feed pet selected");
-
-  callFunction("feed_pet");
-
-  petSync();
-}
-
-void restPet() {
-
-  Serial.println("Rest pet selected");
-
-  callFunction("rest_pet");
-
-  petSync();
-}
-
-void playPet() {
-
-  Serial.println("Play pet selected");
-
-  callFunction("play_pet");
-
-  petSync();
-}
-
-void petSync() {
-
-  Serial.println("Starting pet sync");
-
-  if (!firstSync &&
-      millis() - lastUpdate < updateDelay) {
-
-    Serial.println("Pet sync skipped due to cooldown");
+  DynamicJsonDocument doc(2048);
+  if (!supabaseGetJson("/rest/v1/pet?id=eq.1&select=*", doc)) {
+    Serial.println("[SYNC] pet sync failed");
     return;
   }
 
-  firstSync = false;
-
-  lastUpdate = millis();
-
-  HTTPClient http;
-
-  String url =
-    String(supabaseUrl) +
-    "/rest/v1/pet?id=eq.1&select=*";
-
-  Serial.print("Pet sync URL: ");
-  Serial.println(url);
-
-  http.begin(url);
-
-  http.addHeader("apikey", apiKey);
-
-  http.addHeader(
-    "Authorization",
-    "Bearer " + String(apiKey)
-  );
-
-  int httpResponseCode = http.GET();
-
-  Serial.print("Pet sync response: ");
-  Serial.println(httpResponseCode);
-
-  if (httpResponseCode > 0) {
-
-    String response = http.getString();
-
-    Serial.print("Pet sync raw response: ");
-    Serial.println(response);
-
-    DynamicJsonDocument doc(2048);
-
-    deserializeJson(doc, response);
-
-    JsonObject petData = doc[0];
-
-    pet.hunger = petData["hunger"];
-
-    pet.happy = petData["happiness"];
-
-    pet.energy = petData["energy"];
-
-    Serial.print("Hunger: ");
-    Serial.println(pet.hunger);
-
-    Serial.print("Happy: ");
-    Serial.println(pet.happy);
-
-    Serial.print("Energy: ");
-    Serial.println(pet.energy);
-
-    petStatus();
+  JsonObject petData = doc[0];
+  if (petData.isNull()) {
+    Serial.println("[SYNC] empty pet payload");
+    return;
   }
 
-  else {
+  pet.hunger = petData["hunger"]    | pet.hunger;
+  pet.happy  = petData["happiness"] | pet.happy;
+  pet.energy = petData["energy"]    | pet.energy;
 
-    Serial.println("Pet sync failed");
-  }
-
-  http.end();
-
-  Serial.println("Pet sync ended");
+  Serial.printf("[SYNC] hunger=%d happy=%d energy=%d\n",
+                pet.hunger, pet.happy, pet.energy);
+  petStatus();
 }
 
 void eventSync() {
-
-  Serial.println("Starting event sync");
-
+  Serial.println("[EVT] sync");
   loadingPopup = true;
-
   drawActivityUI();
 
-  HTTPClient http;
-
-  String url =
-    String(supabaseUrl) +
-    "/rest/v1/recent_events?select=*&limit=5";
-
-  Serial.print("Event URL: ");
-  Serial.println(url);
-
-  http.begin(url);
-
-  http.addHeader("apikey", apiKey);
-
-  http.addHeader(
-    "Authorization",
-    "Bearer " + String(apiKey)
-  );
-
-  int httpResponseCode = http.GET();
-
-  Serial.print("Event response code: ");
-  Serial.println(httpResponseCode);
-
+  DynamicJsonDocument doc(2048);
+  bool ok = supabaseGetJson("/rest/v1/recent_events?select=*&limit=5", doc);
   loadingPopup = false;
+  if (!ok) { Serial.println("[EVT] failed"); return; }
 
-  if (httpResponseCode > 0) {
+  eventCount = 0;
+  for (JsonObject item : doc.as<JsonArray>()) {
+    if (eventCount >= 5) break;
 
-    String response = http.getString();
+    String eventUser = item["username"].as<String>();
+    String action    = item["action"].as<String>();
+    String ago       = item["time_ago"].as<String>();
 
-    Serial.print("Event response: ");
-    Serial.println(response);
+    String actionText;
+    if (action == "feed")      actionText = "fed";
+    else if (action == "rest") actionText = "rested";
+    else                       actionText = "played with";
 
-    DynamicJsonDocument doc(2048);
+    events[eventCount].text =
+      "\"" + eventUser + "\" " + actionText + " your bubbl (" + ago + ")";
 
-    deserializeJson(doc, response);
-
-    eventCount = 0;
-
-    for (JsonObject item : doc.as<JsonArray>()) {
-
-      if (eventCount >= 5) break;
-
-      String eventUser =
-        item["username"].as<String>();
-
-      String action =
-        item["action"].as<String>();
-
-      String ago =
-        item["time_ago"].as<String>();
-
-      String actionText = "";
-
-      if (action == "feed") actionText = "fed";
-      else if (action == "rest") actionText = "rested";
-      else actionText = "played with";
-
-      events[eventCount].text =
-        "\"" +
-        eventUser +
-        "\" " +
-        actionText +
-        " your bubbl (" +
-        ago +
-        ")";
-
-      Serial.print("Event ");
-      Serial.print(eventCount);
-      Serial.print(": ");
-      Serial.println(events[eventCount].text);
-
-      eventCount++;
-    }
+    Serial.printf("[EVT] %d: %s\n", eventCount, events[eventCount].text.c_str());
+    eventCount++;
   }
-
-  else {
-
-    Serial.println("Event sync failed");
-  }
-
-  http.end();
-
-  Serial.println("Event sync ended");
 }
 
 void fetchUsers() {
+  Serial.println("[USR] fetch");
 
-  Serial.println("Fetching users");
+  DynamicJsonDocument doc(2048);
+  if (!supabaseGetJson("/rest/v1/users?select=username", doc)) {
+    Serial.println("[USR] failed");
+    return;
+  }
 
-  HTTPClient http;
-
-  String url =
-    String(supabaseUrl) +
-    "/rest/v1/users?select=username";
-
-  Serial.print("Users URL: ");
-  Serial.println(url);
-
-  http.begin(url);
-
-  http.addHeader("apikey", apiKey);
-
-  http.addHeader(
-    "Authorization",
-    "Bearer " + String(apiKey)
-  );
-
-  int httpResponseCode = http.GET();
-
-  Serial.print("Users response code: ");
-  Serial.println(httpResponseCode);
-
-  if (httpResponseCode > 0) {
-
-    String response = http.getString();
-
-    Serial.print("Users response: ");
-    Serial.println(response);
-
-    DynamicJsonDocument doc(2048);
-
-    deserializeJson(doc, response);
-
-    userCount = 0;
-
-    for (JsonObject item : doc.as<JsonArray>()) {
-
-      if (userCount >= 10) break;
-
-      String fetchedUser =
-        item["username"].as<String>();
-
-      if (fetchedUser != username) {
-
-        users[userCount] = fetchedUser;
-
-        Serial.print("Added user: ");
-        Serial.println(users[userCount]);
-
-        userCount++;
-      }
+  userCount = 0;
+  for (JsonObject item : doc.as<JsonArray>()) {
+    if (userCount >= 10) break;
+    String fetchedUser = item["username"].as<String>();
+    if (fetchedUser != username) {
+      users[userCount] = fetchedUser;
+      Serial.print("[USR] + ");
+      Serial.println(users[userCount]);
+      userCount++;
     }
-
-    Serial.print("Total users loaded: ");
-    Serial.println(userCount);
   }
-
-  else {
-
-    Serial.println("Fetch users failed");
-  }
-
-  http.end();
-
-  Serial.println("Fetch users ended");
+  Serial.printf("[USR] %d loaded\n", userCount);
 }
 
 void sendNudge() {
+  if (userCount == 0) { Serial.println("[NDG] no users"); return; }
 
-  Serial.println("sendNudge() called");
-
-  if (userCount == 0) {
-
-    Serial.println("No users available");
-    return;
-  }
-
-  Serial.print("Selected user index: ");
-  Serial.println(selectedUser);
-
-  Serial.print("Sending nudge to: ");
+  Serial.print("[NDG] -> ");
   Serial.println(users[selectedUser]);
 
-  HTTPClient http;
+  String body = "{\"sender\":\"" + username +
+                "\",\"receiver\":\"" + users[selectedUser] + "\"}";
+  String resp;
+  int code;
+  bool ok = supabaseRequest("POST", "/rest/v1/nudges", body, resp, code);
 
-  String url =
-    String(supabaseUrl) +
-    "/rest/v1/nudges";
-
-  Serial.print("Nudge URL: ");
-  Serial.println(url);
-
-  http.begin(url);
-
-  http.setTimeout(1000);
-
-  http.addHeader("Content-Type","application/json");
-
-  http.addHeader("apikey", apiKey);
-
-  http.addHeader(
-    "Authorization",
-    "Bearer " + String(apiKey)
-  );
-
-  String body =
-    "{\"sender\":\"" +
-    username +
-    "\",\"receiver\":\"" +
-    users[selectedUser] +
-    "\"}";
-
-  Serial.print("Nudge body: ");
-  Serial.println(body);
-
-  Serial.println("Sending POST request");
-
-  int httpResponseCode = http.POST(body);
-
-  Serial.print("Nudge response code: ");
-  Serial.println(httpResponseCode);
-
-  if (httpResponseCode > 0) {
-
-    String response = http.getString();
-
-    Serial.print("Nudge response body: ");
-    Serial.println(response);
-  }
-
-  if (httpResponseCode == 201) {
-
-    popupMessage = "Buzz Sent!";
-
-    Serial.println("Nudge success");
-  }
-
-  else {
-
-    popupMessage = "Buzz Failed!";
-
-    Serial.println("Nudge failed");
-  }
-
-  popupStart = millis();
-
-  http.end();
-
-  Serial.println("sendNudge() ended");
+  popupMessage = ok ? "Buzz Sent!" : "Buzz Failed!";
+  popupStart   = millis();
 }
 
 void checkForNudges() {
-
   if (millis() - lastNudgeCheck < nudgeCheckDelay) return;
-
-  Serial.println("Checking for nudges");
-
   lastNudgeCheck = millis();
 
   if (WiFi.status() != WL_CONNECTED) {
-
-    Serial.println("WiFi disconnected");
+    Serial.println("[NDG] check skipped — WiFi down");
     return;
   }
+  Serial.println("[NDG] checking inbox");
 
-  HTTPClient http;
+  String path = "/rest/v1/nudges?receiver=eq." + username +
+                "&seen=eq.false&order=created_at.desc&limit=1";
 
-  String url =
-    String(supabaseUrl) +
-    "/rest/v1/nudges?receiver=eq." +
-    username +
-    "&seen=eq.false&order=created_at.desc&limit=1";
+  DynamicJsonDocument doc(1024);
+  if (!supabaseGetJson(path, doc)) { Serial.println("[NDG] check failed"); return; }
 
-  Serial.print("Check nudge URL: ");
-  Serial.println(url);
+  JsonArray arr = doc.as<JsonArray>();
+  if (arr.size() == 0) return;
 
-  http.begin(url);
+  JsonObject nudge = arr[0];
+  String sender = nudge["sender"].as<String>();
+  long   nudgeId = nudge["id"] | -1;
 
-  http.setTimeout(2000);
+  popupMessage     = "\"" + sender + "\" nudged you";
+  popupStart       = millis();
+  playNotification = true;     // <- actually trigger the sound now
+  Serial.println("[NDG] received!");
 
-  http.addHeader("apikey", apiKey);
-
-  http.addHeader(
-    "Authorization",
-    "Bearer " + String(apiKey)
-  );
-
-  int httpResponseCode = http.GET();
-
-  Serial.print("Check nudge response: ");
-  Serial.println(httpResponseCode);
-
-  if (httpResponseCode > 0) {
-
-    String response = http.getString();
-
-    Serial.print("Check nudge body: ");
-    Serial.println(response);
-
-    DynamicJsonDocument doc(1024);
-
-    deserializeJson(doc, response);
-
-    JsonArray arr = doc.as<JsonArray>();
-
-    Serial.print("Nudge count: ");
-    Serial.println(arr.size());
-
-    if (arr.size() > 0) {
-
-      JsonObject nudge = arr[0];
-
-      String sender =
-        nudge["sender"].as<String>();
-
-      int nudgeId =
-        nudge["id"];
-
-      popupMessage =
-        "\"" + sender + "\" nudged you";
-
-      popupStart = millis();
-
-      Serial.println("Nudge received");
-
-      HTTPClient seenHttp;
-
-      String seenUrl =
-        String(supabaseUrl) +
-        "/rest/v1/nudges?id=eq." +
-        String(nudgeId);
-
-      Serial.print("Seen URL: ");
-      Serial.println(seenUrl);
-
-      seenHttp.begin(seenUrl);
-
-      seenHttp.setTimeout(2000);
-
-      seenHttp.addHeader(
-        "Content-Type",
-        "application/json"
-      );
-
-      seenHttp.addHeader("apikey", apiKey);
-
-      seenHttp.addHeader(
-        "Authorization",
-        "Bearer " + String(apiKey)
-      );
-
-      int patchCode = seenHttp.PATCH("{\"seen\":true}");
-
-      Serial.print("Seen PATCH response: ");
-      Serial.println(patchCode);
-
-      seenHttp.end();
-    }
+  if (nudgeId >= 0) {
+    String seenPath = "/rest/v1/nudges?id=eq." + String(nudgeId);
+    String resp;
+    int code;
+    supabaseRequest("PATCH", seenPath, "{\"seen\":true}", resp, code);
   }
-
-  else {
-
-    Serial.println("Check nudge failed");
-  }
-
-  http.end();
-
-  Serial.println("Finished checking nudges");
 }
 
+// ============================================================================
+//  Input
+// ============================================================================
+
 void handleJoystick() {
-
   int x = analogRead(JOY_X);
-
   int y = 4095 - analogRead(JOY_Y);
 
   if (millis() - lastMove < moveDelay) return;
 
   if (currentScreen == ACTIVITY) {
-
     if (eventCount == 0) return;
-
-    if (y < 1200) {
-
-      selectedEvent--;
-
-      if (selectedEvent < 0) {
-        selectedEvent = eventCount - 1;
-      }
-
-      Serial.print("Selected event: ");
-      Serial.println(selectedEvent);
-
-      textScrollX = 0;
-
-      lastMove = millis();
-
-      return;
+    if (y < JOY_LOW) {
+      selectedEvent = (selectedEvent - 1 + eventCount) % eventCount;
+      textScrollX = 0; lastMove = millis();
+    } else if (y > JOY_HIGH) {
+      selectedEvent = (selectedEvent + 1) % eventCount;
+      textScrollX = 0; lastMove = millis();
     }
-
-    else if (y > 2800) {
-
-      selectedEvent++;
-
-      if (selectedEvent >= eventCount) {
-        selectedEvent = 0;
-      }
-
-      Serial.print("Selected event: ");
-      Serial.println(selectedEvent);
-
-      textScrollX = 0;
-
-      lastMove = millis();
-
-      return;
-    }
+    return;
   }
 
   if (currentScreen == PET_MENU) {
-
-    if (y < 1200) {
-
-      selectedPetOption--;
-
-      if (selectedPetOption < 0) {
-        selectedPetOption = petTotal - 1;
-      }
-
-      Serial.print("Pet menu selection: ");
-      Serial.println(selectedPetOption);
-
+    if (y < JOY_LOW) {
+      selectedPetOption = (selectedPetOption - 1 + petTotal) % petTotal;
       lastMove = millis();
-
-      return;
-    }
-
-    else if (y > 2800) {
-
-      selectedPetOption++;
-
-      if (selectedPetOption >= petTotal) {
-        selectedPetOption = 0;
-      }
-
-      Serial.print("Pet menu selection: ");
-      Serial.println(selectedPetOption);
-
+    } else if (y > JOY_HIGH) {
+      selectedPetOption = (selectedPetOption + 1) % petTotal;
       lastMove = millis();
-
-      return;
     }
+    return;
   }
 
   if (currentScreen == NUDGE) {
-
     if (userCount == 0) return;
-
-    if (y < 1200) {
-
-      selectedUser--;
-
-      if (selectedUser < 0) {
-        selectedUser = userCount - 1;
-      }
-
-      Serial.print("Selected user: ");
-      Serial.println(users[selectedUser]);
-
+    if (y < JOY_LOW) {
+      selectedUser = (selectedUser - 1 + userCount) % userCount;
       lastMove = millis();
-
-      return;
-    }
-
-    else if (y > 2800) {
-
-      selectedUser++;
-
-      if (selectedUser >= userCount) {
-        selectedUser = 0;
-      }
-
-      Serial.print("Selected user: ");
-      Serial.println(users[selectedUser]);
-
+    } else if (y > JOY_HIGH) {
+      selectedUser = (selectedUser + 1) % userCount;
       lastMove = millis();
-
-      return;
     }
+    return;
   }
 
   if (currentScreen == MAIN) {
-
-    if (y < 1200 &&
-        currentFocus == MENU) {
-
-      currentFocus = PET;
-
-      Serial.println("Focus switched to PET");
-
-      lastMove = millis();
-
-      return;
+    if (y < JOY_LOW && currentFocus == MENU) {
+      currentFocus = PET; lastMove = millis(); return;
     }
-
-    if (y > 2800 &&
-        currentFocus == PET) {
-
-      currentFocus = MENU;
-
-      Serial.println("Focus switched to MENU");
-
-      lastMove = millis();
-
-      return;
+    if (y > JOY_HIGH && currentFocus == PET) {
+      currentFocus = MENU; lastMove = millis(); return;
     }
-
     if (currentFocus == MENU) {
-
-      if (x > 2800) {
-
-        selected--;
-
-        if (selected < 0) {
-          selected = total - 1;
-        }
-
-        Serial.print("Main selection: ");
-        Serial.println(options[selected]);
-
-        lastMove = millis();
-
-        return;
-      }
-
-      else if (x < 1200) {
-
-        selected++;
-
-        if (selected >= total) {
-          selected = 0;
-        }
-
-        Serial.print("Main selection: ");
-        Serial.println(options[selected]);
-
-        lastMove = millis();
-
-        return;
+      if (x > JOY_HIGH) {
+        selected = (selected - 1 + total) % total; lastMove = millis();
+      } else if (x < JOY_LOW) {
+        selected = (selected + 1) % total; lastMove = millis();
       }
     }
   }
 }
 
 void handleBtn() {
+  bool currentState = digitalRead(JOY_BTN);
 
-  bool currentState =
-    digitalRead(JOY_BTN);
-
-  if (currentState == LOW &&
-      lastButtonState == HIGH) {
-
-    Serial.println("Button pressed");
-
-    buttonHoldStart = millis();
-
+  // Falling edge: press begins.
+  if (currentState == LOW && lastButtonState == HIGH) {
+    buttonHoldStart    = millis();
     longPressTriggered = false;
   }
 
-  if (currentState == LOW &&
-      !longPressTriggered &&
+  // Long press fires while held.
+  if (currentState == LOW && !longPressTriggered &&
       millis() - buttonHoldStart > longPressDelay) {
-
-    Serial.println("Long press triggered");
-
     longPressTriggered = true;
 
     if (currentScreen == NUDGE) {
-
       currentScreen = PET_MENU;
-
-      Serial.println("Returning to PET_MENU");
-
       lastPress = millis();
-    }
-
-    else if (
-      currentScreen == STATS ||
-      currentScreen == ACTIVITY ||
-      currentScreen == PET_MENU
-    ) {
-
+    } else if (currentScreen == STATS || currentScreen == ACTIVITY ||
+               currentScreen == PET_MENU) {
       currentScreen = MAIN;
-
-      Serial.println("Returning to MAIN");
-
       lastPress = millis();
     }
-
     lastButtonState = currentState;
-
     return;
   }
 
-  if (lastButtonState == LOW &&
-      currentState == HIGH &&
-      !longPressTriggered &&
-      millis() - lastPress > pressDelay) {
-
-    Serial.println("Short press detected");
-
+  // Rising edge without a long press = short press (click).
+  if (lastButtonState == LOW && currentState == HIGH &&
+      !longPressTriggered && millis() - lastPress > pressDelay) {
     lastPress = millis();
 
     if (currentScreen == PET_MENU) {
-
-      Serial.print("Pet menu enter: ");
-      Serial.println(selectedPetOption);
-
       switch (selectedPetOption) {
-
-        case 0:
-
-          Serial.println("Opening STATS");
-
-          petSync();
-
-          currentScreen = STATS;
-
-          break;
-
-        case 1:
-
-          Serial.println("Opening NUDGE");
-
-          selectedUser = 0;
-
-          currentScreen = NUDGE;
-
-          break;
-
-        case 2:
-
-          Serial.println("Opening ACTIVITY");
-
-          eventSync();
-
-          selectedEvent = 0;
-
-          textScrollX = 0;
-
-          currentScreen = ACTIVITY;
-
-          break;
+        case 0: petSync(true); currentScreen = STATS; break;
+        case 1: selectedUser = 0; currentScreen = NUDGE; break;
+        case 2: eventSync(); selectedEvent = 0; textScrollX = 0;
+                currentScreen = ACTIVITY; break;
       }
-
+      lastButtonState = currentState;
       return;
     }
 
     if (currentScreen == NUDGE) {
-
-      Serial.println("Attempting sendNudge");
-
       sendNudge();
-
+      lastButtonState = currentState;
       return;
     }
 
     if (currentScreen == MAIN) {
-
       if (currentFocus == PET) {
-
-        Serial.println("Opening PET_MENU");
-
-        currentScreen = PET_MENU;
-
+        currentScreen     = PET_MENU;
         selectedPetOption = 0;
-      }
-
-      else {
-
-        Serial.print("Executing action: ");
-        Serial.println(options[selected]);
-
+      } else {
         switch (selected) {
-
-          case 0:
-            feedPet();
-            break;
-
-          case 1:
-            restPet();
-            break;
-
-          case 2:
-            playPet();
-            break;
+          case 0: feedPet(); break;
+          case 1: restPet(); break;
+          case 2: playPet(); break;
         }
       }
     }
@@ -1370,55 +815,75 @@ void handleBtn() {
   lastButtonState = currentState;
 }
 
-void loop() {
+// ============================================================================
+//  Setup / loop
+// ============================================================================
 
-  audio.loop();
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n========== BOOT ==========");
 
-if (playNotification) {
+  pinMode(JOY_BTN, INPUT_PULLUP);
 
-  audio.connecttoFS(
-    SPIFFS,
-    "/nudge.wav"
-  );
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Serial.println("[I2C] started");
 
-  playNotification = false;
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("[OLED] FAILED");
+    while (1) delay(10);
+  }
+  Serial.println("[OLED] ready");
+  drawBootScreen();
+
+  connectWiFi();
+
+  // Supabase uses HTTPS; skip cert pinning for simplicity on-device.
+  secureClient.setInsecure();
+
+  // Audio: mount SPIFFS first, then wire up I2S. (Mount failure is fatal
+  // for sound but not for the rest of the device.)
+  if (!SPIFFS.begin(true)) {
+    Serial.println("[FS] SPIFFS mount failed — audio disabled");
+  }
+  audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DIN);
+  audio.setVolume(15);
+
+  petSync(true);
+  fetchUsers();
+
+  display.clearDisplay();
+  display.display();
+  Serial.println("[BOOT] setup complete");
 }
 
+void loop() {
+  audio.loop();
+
+  if (playNotification) {
+    audio.connecttoFS(SPIFFS, NOTIFY_SOUND);
+    playNotification = false;
+  }
+
   handleJoystick();
-
   handleBtn();
-
+  ensureWiFi();
   checkForNudges();
 
   if (millis() - lastFrame >= frameDelay) {
-
     lastFrame = millis();
+    updateBlink();
 
-    if (currentScreen == MAIN) {
-      drawMainUI();
-    }
-
-    else if (currentScreen == PET_MENU) {
-      drawPetMainUI();
-    }
-
-    else if (currentScreen == STATS) {
-      drawStatsUI();
-    }
-
-    else if (currentScreen == ACTIVITY) {
-      drawActivityUI();
-    }
-
-    else if (currentScreen == NUDGE) {
-      drawNudgeUI();
+    switch (currentScreen) {
+      case MAIN:     drawMainUI();    break;
+      case PET_MENU: drawPetMainUI(); break;
+      case STATS:    drawStatsUI();   break;
+      case ACTIVITY: drawActivityUI();break;
+      case NUDGE:    drawNudgeUI();   break;
     }
   }
 
   if (millis() - lastPrint > 2500) {
-
     lastPrint = millis();
-
-    Serial.println("Loop heartbeat");
+    Serial.println("[hb] alive");
   }
 }
